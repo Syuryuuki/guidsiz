@@ -37,7 +37,13 @@ class BaseTerminalController: NSWindowController,
 
     /// The currently focused surface.
     var focusedSurface: Ghostty.SurfaceView? {
-        didSet { syncFocusToSurfaceTree() }
+        didSet {
+            syncFocusToSurfaceTree()
+            NotificationCenter.default.post(
+                name: .ghosttyTerminalFocusedSurfaceDidChange,
+                object: self
+            )
+        }
     }
 
     /// The tree of splits within this terminal window.
@@ -88,6 +94,10 @@ class BaseTerminalController: NSWindowController,
 
     /// Cancellable for aggregating bell state across all surfaces in this controller.
     private var bellStateCancellable: AnyCancellable?
+
+    private var claudeSessionRegistry: ClaudeSessionRegistry? {
+        (NSApplication.shared.delegate as? AppDelegate)?.claudeSessionRegistry
+    }
 
     /// An override title for the tab/window set by the user via prompt_tab_title.
     /// When set, this takes precedence over the computed title from the terminal.
@@ -448,6 +458,8 @@ class BaseTerminalController: NSWindowController,
     ///
     /// This does no confirmation and assumes confirmation is already done.
     private func removeSurfaceNode(_ node: SplitTree<Ghostty.SurfaceView>.Node) {
+        claudeSessionRegistry?.unregister(surfaces: Array(node))
+
         // Move focus if the closed surface was focused and we have a next target
         let nextFocus: Ghostty.SurfaceView? = if node.contains(
             where: { $0 == focusedSurface }
@@ -1208,6 +1220,8 @@ class BaseTerminalController: NSWindowController,
 
     func windowWillClose(_ notification: Notification) {
         guard let window else { return }
+
+        claudeSessionRegistry?.unregister(surfaces: Array(surfaceTree))
 
         // Emit a final bell-state transition so any observers can clear state
         // without separately tracking NSWindow lifecycle events.

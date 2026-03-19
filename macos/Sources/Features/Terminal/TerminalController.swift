@@ -1036,7 +1036,19 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Initialize our content view to the SwiftUI root
         let container = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                ClaudeWorkspaceView(
+                    ghostty: self.ghostty,
+                    controller: self,
+                    projectsStore: appDelegate.claudeProjectsStore,
+                    registry: appDelegate.claudeSessionRegistry,
+                    launcher: appDelegate.claudeSessionLauncher
+                ) {
+                    TerminalView(ghostty: self.ghostty, viewModel: self, delegate: self)
+                }
+            } else {
+                TerminalView(ghostty: self.ghostty, viewModel: self, delegate: self)
+            }
         }
 
         // Set the initial content size on the container so that

@@ -242,6 +242,7 @@ extension Ghostty {
         // the terminal title as the main title property. If the title is set manually
         // by the user, this is set to the prior value (which may be empty, but non-nil).
         private var titleFromTerminal: String?
+        var claudeSessionContext: ClaudeSessionContext?
 
         // The cached contents of the screen.
         private(set) var cachedScreenContents: CachedValue<String>
@@ -1766,6 +1767,8 @@ extension Ghostty {
             case uuid
             case title
             case isUserSetTitle
+            case claudeSessionId
+            case claudeProjectPath
         }
 
         required convenience init(from decoder: Decoder) throws {
@@ -1779,11 +1782,32 @@ extension Ghostty {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             let uuid = UUID(uuidString: try container.decode(String.self, forKey: .uuid))
             var config = Ghostty.SurfaceConfiguration()
-            config.workingDirectory = try container.decode(String?.self, forKey: .pwd)
+            let restoredPwd = try container.decode(String?.self, forKey: .pwd)
+            config.workingDirectory = restoredPwd
             let savedTitle = try container.decodeIfPresent(String.self, forKey: .title)
             let isUserSetTitle = try container.decodeIfPresent(Bool.self, forKey: .isUserSetTitle) ?? false
+            let restoredSessionId = try container.decodeIfPresent(String.self, forKey: .claudeSessionId)
+            let restoredProjectPath = try container.decodeIfPresent(String.self, forKey: .claudeProjectPath)
+
+            let restoredClaudeContext: ClaudeSessionContext?
+            if
+                let restoredSessionId,
+                let restoredProjectPath,
+                !restoredSessionId.isEmpty,
+                !restoredProjectPath.isEmpty {
+                config.workingDirectory = restoredProjectPath
+                config.initialInput = "claude -r \(restoredSessionId)\n"
+                restoredClaudeContext = .init(
+                    sessionId: restoredSessionId,
+                    projectPath: restoredProjectPath,
+                    openedAt: Date()
+                )
+            } else {
+                restoredClaudeContext = nil
+            }
 
             self.init(app, baseConfig: config, uuid: uuid)
+            self.claudeSessionContext = restoredClaudeContext
 
             // Restore the saved title after initialization
             if let title = savedTitle {
@@ -1801,6 +1825,8 @@ extension Ghostty {
             try container.encode(id.uuidString, forKey: .uuid)
             try container.encode(title, forKey: .title)
             try container.encode(titleFromTerminal != nil, forKey: .isUserSetTitle)
+            try container.encode(claudeSessionContext?.sessionId, forKey: .claudeSessionId)
+            try container.encode(claudeSessionContext?.projectPath, forKey: .claudeProjectPath)
         }
     }
 }

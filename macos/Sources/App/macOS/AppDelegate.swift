@@ -97,6 +97,9 @@ class AppDelegate: NSObject,
 
     /// The ghostty global state. Only one per process.
     let ghostty: Ghostty.App
+    let claudeProjectsStore: ClaudeProjectsStore
+    let claudeSessionRegistry: ClaudeSessionRegistry
+    let claudeSessionLauncher: ClaudeSessionLauncher
 
     /// The global undo manager for app-level state such as window restoration.
     lazy var undoManager = ExpiringUndoManager()
@@ -167,6 +170,9 @@ class AppDelegate: NSObject,
 #else
         ghostty = Ghostty.App()
 #endif
+        claudeProjectsStore = ClaudeProjectsStore()
+        claudeSessionRegistry = ClaudeSessionRegistry()
+        claudeSessionLauncher = ClaudeSessionLauncher(registry: claudeSessionRegistry)
         super.init()
 
         ghostty.delegate = self
@@ -962,6 +968,24 @@ class AppDelegate: NSObject,
             ghostty,
             from: TerminalController.preferredParent?.window
         )
+    }
+
+    @IBAction func importClaudeProject(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "Import"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            try? await claudeProjectsStore.importProject(at: url.path)
+        }
+    }
+
+    @IBAction func refreshClaudeProjects(_ sender: Any?) {
+        Task { await claudeProjectsStore.refreshAll() }
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {
