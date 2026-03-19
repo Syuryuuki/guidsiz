@@ -58,6 +58,17 @@ class TerminalWindow: NSWindow {
         windowController as? TerminalController
     }
 
+    /// Width reserved for the Claude sidebar in the titlebar/tab bar layout.
+    var claudeSidebarLeadingInset: CGFloat = 0 {
+        didSet {
+            guard claudeSidebarLeadingInset != oldValue else { return }
+            updateForClaudeSidebarInset()
+        }
+    }
+
+    private var claudeSidebarTitlebarMaskView: ClaudeSidebarTitlebarMaskView?
+    private var claudeSidebarTitlebarMaskWidthConstraint: NSLayoutConstraint?
+
     /// The color assigned to this window's tab. Setting this updates the tab color indicator
     /// and marks the window's restorable state as dirty.
     var tabColor: TerminalTabColor = .none {
@@ -501,6 +512,65 @@ class TerminalWindow: NSWindow {
         }
     }
 
+    func updateForClaudeSidebarInset() {
+        updateClaudeSidebarTitlebarMask()
+    }
+
+    private func updateClaudeSidebarTitlebarMask() {
+        guard styleMask.contains(.titled),
+              let titlebarView = titlebarContainer?.firstDescendant(withClassName: "NSTitlebarView")
+        else {
+            claudeSidebarTitlebarMaskView?.removeFromSuperview()
+            claudeSidebarTitlebarMaskView = nil
+            claudeSidebarTitlebarMaskWidthConstraint = nil
+            return
+        }
+
+        guard claudeSidebarLeadingInset > 0 else {
+            claudeSidebarTitlebarMaskView?.isHidden = true
+            titlebarTextField?.isHidden = false
+            titlebarView.firstDescendant(withClassName: "NSThemeDocumentButton")?.isHidden = false
+            return
+        }
+
+        let view: ClaudeSidebarTitlebarMaskView
+        if let existing = claudeSidebarTitlebarMaskView, existing.superview == titlebarView {
+            view = existing
+        } else {
+            claudeSidebarTitlebarMaskView?.removeFromSuperview()
+
+            let created = ClaudeSidebarTitlebarMaskView()
+            created.identifier = NSUserInterfaceItemIdentifier("_claudeSidebarTitlebarMask")
+            created.translatesAutoresizingMaskIntoConstraints = false
+            titlebarView.addSubview(created, positioned: .above, relativeTo: nil)
+
+            let widthConstraint = created.widthAnchor.constraint(equalToConstant: claudeSidebarLeadingInset)
+            claudeSidebarTitlebarMaskWidthConstraint = widthConstraint
+
+            NSLayoutConstraint.activate([
+                created.leftAnchor.constraint(equalTo: titlebarView.leftAnchor),
+                created.topAnchor.constraint(equalTo: titlebarView.topAnchor),
+                created.bottomAnchor.constraint(equalTo: titlebarView.bottomAnchor),
+                widthConstraint,
+            ])
+
+            claudeSidebarTitlebarMaskView = created
+            view = created
+        }
+
+        claudeSidebarTitlebarMaskWidthConstraint?.constant = claudeSidebarLeadingInset
+        view.isHidden = false
+        view.backgroundColor = preferredBackgroundColor ??
+            derivedConfig.backgroundColor.withAlphaComponent(derivedConfig.backgroundOpacity)
+        titlebarTextField?.isHidden = true
+        titlebarView.firstDescendant(withClassName: "NSThemeDocumentButton")?.isHidden = true
+
+        if let buttonsContainer = standardWindowButton(.closeButton)?.superview,
+           buttonsContainer.superview == titlebarView {
+            titlebarView.addSubview(buttonsContainer, positioned: .above, relativeTo: view)
+        }
+    }
+
     /// The preferred window background color. The current window background color may not be set
     /// to this, since this is dynamic based on the state of the surface tree.
     ///
@@ -613,6 +683,33 @@ class TerminalWindow: NSWindow {
             default:
                 self.windowCornerRadius = 16
             }
+        }
+    }
+}
+
+private final class ClaudeSidebarTitlebarMaskView: NSView {
+    var backgroundColor: NSColor = .windowBackgroundColor {
+        didSet {
+            wantsLayer = true
+            layer?.backgroundColor = backgroundColor.cgColor
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = backgroundColor.cgColor
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.type == .leftMouseDown && event.clickCount == 1 {
+            window?.performDrag(with: event)
+        } else {
+            super.mouseDown(with: event)
         }
     }
 }

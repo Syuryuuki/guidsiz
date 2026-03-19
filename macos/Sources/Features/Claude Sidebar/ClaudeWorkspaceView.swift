@@ -16,6 +16,7 @@ struct ClaudeWorkspaceView<Content: View>: View {
     @State private var didRestoreSidebarState: Bool = false
     @State private var selectedProjectPath: String?
     @State private var selectedSessionId: String?
+    @State private var sidebarTopInset: CGFloat = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -27,6 +28,7 @@ struct ClaudeWorkspaceView<Content: View>: View {
                     launcher: launcher,
                     onToggleSidebar: { sidebarVisible = false },
                     backgroundColor: ghostty.config.backgroundColor,
+                    topInset: sidebarTopInset,
                     selectedProjectPath: $selectedProjectPath,
                     selectedSessionId: $selectedSessionId
                 )
@@ -63,6 +65,8 @@ struct ClaudeWorkspaceView<Content: View>: View {
             registerSurfaceContexts()
             syncSelectionFromFocusedSurface()
             restoreSidebarStateIfNeeded()
+            syncWindowSidebarInset()
+            syncSidebarTopInset()
         }
         .onReceive(controller.$surfaceTree) { _ in
             registerSurfaceContexts()
@@ -72,11 +76,18 @@ struct ClaudeWorkspaceView<Content: View>: View {
             guard let source = note.object as? BaseTerminalController, source === controller else { return }
             syncSelectionFromFocusedSurface()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { note in
+            guard let window = note.object as? NSWindow, window === controller.window else { return }
+            syncSidebarTopInset()
+        }
         .onChange(of: sidebarVisible) { visible in
             UserDefaults.ghostty.set(visible, forKey: UserDefaults.ClaudeSidebarKey.isVisible)
+            syncWindowSidebarInset()
+            syncSidebarTopInset()
         }
         .onChange(of: sidebarWidth) { width in
             UserDefaults.ghostty.set(width, forKey: UserDefaults.ClaudeSidebarKey.width)
+            syncWindowSidebarInset()
         }
         .onChange(of: selectedProjectPath) { path in
             UserDefaults.ghostty.set(path, forKey: UserDefaults.ClaudeSidebarKey.selectedProjectPath)
@@ -133,5 +144,19 @@ struct ClaudeWorkspaceView<Content: View>: View {
                 controller: controller
             )
         }
+    }
+
+    private func syncWindowSidebarInset() {
+        guard let window = controller.window as? TerminalWindow else { return }
+        window.claudeSidebarLeadingInset = sidebarVisible ? sidebarWidth + 4 : 0
+    }
+
+    private func syncSidebarTopInset() {
+        guard sidebarVisible else {
+            sidebarTopInset = 0
+            return
+        }
+        guard let window = controller.window else { return }
+        sidebarTopInset = max(0, window.frame.height - window.contentLayoutRect.height)
     }
 }

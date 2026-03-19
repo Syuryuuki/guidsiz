@@ -3,6 +3,8 @@ import AppKit
 /// A terminal window style that provides a transparent titlebar effect. With this effect, the titlebar
 /// matches the background color of the window.
 class TransparentTitlebarTerminalWindow: TerminalWindow {
+    private let claudeSidebarTabBarGap: CGFloat = 64
+
     /// Stores the last surface configuration to reapply appearance when needed.
     /// This is necessary because various macOS operations (tab switching, tab bar
     /// visibility changes) can reset the titlebar appearance.
@@ -11,10 +13,20 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
     /// KVO observation for tab group window changes.
     private var tabGroupWindowsObservation: NSKeyValueObservation?
     private var tabBarVisibleObservation: NSKeyValueObservation?
+    private var focusedSurfaceObservation: NSObjectProtocol?
+    private var nativeTabBarUpdateGeneration: UInt = 0
+    private var nativeTabBarFrameObservers: [NSObjectProtocol] = []
+    private var nativeTabBarObservedViewIDs: [ObjectIdentifier] = []
+    private var isApplyingNativeTabBarFrames = false
+    private var isQueuedNativeTabBarFrameUpdate = false
 
     deinit {
         tabGroupWindowsObservation?.invalidate()
         tabBarVisibleObservation?.invalidate()
+        if let focusedSurfaceObservation {
+            NotificationCenter.default.removeObserver(focusedSurfaceObservation)
+        }
+        clearNativeTabBarFrameObservers()
     }
 
     // MARK: NSWindow
@@ -25,6 +37,7 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
         // Setup all the KVO we will use, see the docs for the respective functions
         // to learn why we need KVO.
         setupKVO()
+        setupFocusedSurfaceObservation()
     }
 
     override func becomeMain() {
@@ -32,6 +45,7 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
 
         guard let lastSurfaceConfig else { return }
         syncAppearance(lastSurfaceConfig)
+        scheduleNativeTabBarSidebarUpdate()
 
         // This is a nasty edge case. If we're going from 2 to 1 tab and the tab bar
         // automatically disappears, then we need to resync our appearance because
@@ -45,6 +59,7 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
 
     override func update() {
         super.update()
+        applyNativeTabBarForClaudeSidebar()
 
         // On macOS 13 to 15, we need to hide the NSVisualEffectView in order to allow our
         // titlebar to be truly transparent.
@@ -76,6 +91,13 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
         } else {
             syncAppearanceVentura(surfaceConfig)
         }
+
+        updateForClaudeSidebarInset()
+    }
+
+    override func updateForClaudeSidebarInset() {
+        super.updateForClaudeSidebarInset()
+        scheduleNativeTabBarSidebarUpdate()
     }
 
     @available(macOS 26.0, *)
@@ -134,6 +156,35 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
         setupTabBarVisibleObservation()
     }
 
+    private func setupFocusedSurfaceObservation() {
+        if let focusedSurfaceObservation {
+            NotificationCenter.default.removeObserver(focusedSurfaceObservation)
+        }
+
+        focusedSurfaceObservation = NotificationCenter.default.addObserver(
+            forName: .ghosttyTerminalFocusedSurfaceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            guard let source = note.object as? BaseTerminalController else { return }
+            guard source === self.windowController as? BaseTerminalController else { return }
+
+            // AppKit may restyle and relayout the native tab bar asynchronously after
+            // focus/tab changes, so we re-apply our inset over the next few turns.
+            self.scheduleNativeTabBarSidebarUpdate()
+        }
+    }
+
+    private func clearNativeTabBarFrameObservers() {
+        let center = NotificationCenter.default
+        for observer in nativeTabBarFrameObservers {
+            center.removeObserver(observer)
+        }
+        nativeTabBarFrameObservers.removeAll()
+        nativeTabBarObservedViewIDs.removeAll()
+    }
+
     /// Monitors the tabGroup windows value for any changes and resyncs the appearance on change.
     /// This is necessary because when the windows change, the tab bar and titlebar are recreated
     /// which breaks our changes.
@@ -141,6 +192,7 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
         // Remove existing observation if any
         tabGroupWindowsObservation?.invalidate()
         tabGroupWindowsObservation = nil
+        clearNativeTabBarFrameObservers()
 
         // Check if tabGroup is available
         guard let tabGroup else { return }
@@ -161,6 +213,7 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
             guard let self else { return }
             guard let lastSurfaceConfig else { return }
             self.syncAppearance(lastSurfaceConfig)
+            self.scheduleNativeTabBarSidebarUpdate()
         }
     }
 
@@ -179,6 +232,7 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
             guard let self else { return }
             guard let lastSurfaceConfig else { return }
             self.syncAppearance(lastSurfaceConfig)
+            self.scheduleNativeTabBarSidebarUpdate()
         }
     }
 
@@ -204,5 +258,147 @@ class TransparentTitlebarTerminalWindow: TerminalWindow {
         }
 
         effectViewIsHidden = true
+    }
+
+    private func scheduleNativeTabBarSidebarUpdate() {
+        nativeTabBarUpdateGeneration &+= 1
+        let generation = nativeTabBarUpdateGeneration
+
+        applyNativeTabBarForClaudeSidebar()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.applyScheduledNativeTabBarUpdate(generation: generation)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in
+            self?.applyScheduledNativeTabBarUpdate(generation: generation)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80)) { [weak self] in
+            self?.applyScheduledNativeTabBarUpdate(generation: generation)
+        }
+    }
+
+    private func applyScheduledNativeTabBarUpdate(generation: UInt) {
+        guard generation == nativeTabBarUpdateGeneration else { return }
+        applyNativeTabBarForClaudeSidebar()
+    }
+
+    private func queueNativeTabBarSidebarUpdate() {
+        guard !isQueuedNativeTabBarFrameUpdate else { return }
+        isQueuedNativeTabBarFrameUpdate = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isQueuedNativeTabBarFrameUpdate = false
+            self.scheduleNativeTabBarSidebarUpdate()
+        }
+    }
+
+    private func nativeTabBarComponents() -> (
+        titlebarView: NSView,
+        containerView: NSView,
+        clipView: NSView,
+        tabHost: NSView,
+        tabBar: NSView
+    )? {
+        guard
+            let titlebarView = titlebarContainer?.firstDescendant(withClassName: "NSTitlebarView"),
+            let tabBar = titlebarView.firstDescendant(withClassName: "NSTabBar"),
+            let clipView = tabBar.firstSuperview(withClassName: "NSTitlebarAccessoryClipView"),
+            let tabHost = tabBar.superview,
+            let containerView = clipView.superview
+        else { return nil }
+
+        return (titlebarView, containerView, clipView, tabHost, tabBar)
+    }
+
+    private func ensureNativeTabBarFrameObservers(
+        titlebarView: NSView,
+        containerView: NSView,
+        clipView: NSView,
+        tabHost: NSView,
+        tabBar: NSView
+    ) {
+        let views = [titlebarView, containerView, clipView, tabHost, tabBar]
+        let ids = views.map(ObjectIdentifier.init)
+        guard ids != nativeTabBarObservedViewIDs else { return }
+
+        clearNativeTabBarFrameObservers()
+        nativeTabBarObservedViewIDs = ids
+
+        let center = NotificationCenter.default
+        nativeTabBarFrameObservers = views.map { view in
+            view.postsFrameChangedNotifications = true
+            return center.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: view,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                guard !self.isApplyingNativeTabBarFrames else { return }
+                self.queueNativeTabBarSidebarUpdate()
+            }
+        }
+    }
+
+    private func applyNativeTabBarForClaudeSidebar() {
+        guard let components = nativeTabBarComponents() else { return }
+
+        let titlebarView = components.titlebarView
+        let containerView = components.containerView
+        let clipView = components.clipView
+        let tabHost = components.tabHost
+        let tabBar = components.tabBar
+
+        ensureNativeTabBarFrameObservers(
+            titlebarView: titlebarView,
+            containerView: containerView,
+            clipView: clipView,
+            tabHost: tabHost,
+            tabBar: tabBar
+        )
+
+        isApplyingNativeTabBarFrames = true
+        defer { isApplyingNativeTabBarFrames = false }
+
+        titlebarView.layoutSubtreeIfNeeded()
+        containerView.superview?.layoutSubtreeIfNeeded()
+        containerView.layoutSubtreeIfNeeded()
+
+        let inset = max(0, claudeSidebarLeadingInset + claudeSidebarTabBarGap)
+        let targetWidth = max(0, titlebarView.bounds.width - inset)
+
+        if containerView.frame.origin.x != inset || containerView.frame.width != targetWidth {
+            containerView.frame = NSRect(
+                x: inset,
+                y: containerView.frame.origin.y,
+                width: targetWidth,
+                height: containerView.frame.height
+            )
+        }
+
+        if clipView.frame != containerView.bounds {
+            clipView.frame = containerView.bounds
+        }
+
+        if tabHost.frame != clipView.bounds {
+            tabHost.frame = clipView.bounds
+        }
+
+        let tabBarHeight = tabBar.frame.height
+        let targetTabBarFrame = NSRect(
+            x: 0,
+            y: max(0, tabHost.bounds.height - tabBarHeight),
+            width: tabHost.bounds.width,
+            height: tabBarHeight
+        )
+        if tabBar.frame != targetTabBarFrame {
+            tabBar.frame = targetTabBarFrame
+        }
+
+        containerView.needsLayout = true
+        clipView.needsLayout = true
+        tabHost.needsLayout = true
+        tabBar.needsLayout = true
+        titlebarView.layoutSubtreeIfNeeded()
     }
 }

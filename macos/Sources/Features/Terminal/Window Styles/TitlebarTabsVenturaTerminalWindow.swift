@@ -171,6 +171,11 @@ class TitlebarTabsVenturaTerminalWindow: TerminalWindow {
     }
 
     private var newTabButtonImageLayer: VibrantLayer?
+    private var tabBarLeadingConstraint: NSLayoutConstraint?
+    private var dragHandleLeadingConstraint: NSLayoutConstraint?
+    private var windowButtonsBackdropRightConstraint: NSLayoutConstraint?
+    private var sidebarTitlebarMask: ClaudeSidebarTitlebarMaskView?
+    private var sidebarTitlebarMaskWidthConstraint: NSLayoutConstraint?
 
     func updateTabBar() {
         newTabButtonImageLayer = nil
@@ -183,6 +188,16 @@ class TitlebarTabsVenturaTerminalWindow: TerminalWindow {
             tabBarAccessoryViewController.layoutAttribute = .right
             pushTabsToTitlebar(tabBarAccessoryViewController)
         }
+    }
+
+    override func updateForClaudeSidebarInset() {
+        let buttonsWidth: CGFloat = hasWindowButtons ? 78 : 0
+        tabBarLeadingConstraint?.constant = buttonsWidth
+        dragHandleLeadingConstraint?.constant = claudeSidebarLeadingInset
+        windowButtonsBackdropRightConstraint?.constant = buttonsWidth
+        sidebarTitlebarMaskWidthConstraint?.constant = claudeSidebarLeadingInset
+        sidebarTitlebarMask?.isHidden = claudeSidebarLeadingInset <= 0
+        sidebarTitlebarMask?.backgroundColor = titlebarColor
     }
 
     // Since we are coloring the new tab button's image, it doesn't respond to the
@@ -422,12 +437,15 @@ class TitlebarTabsVenturaTerminalWindow: TerminalWindow {
             }) else { return }
 
             self?.addWindowButtonsBackdrop(titlebarView: titlebarView, toolbarView: toolbarView)
-            guard let windowButtonsBackdrop = self?.windowButtonsBackdrop else { return }
+            guard self?.windowButtonsBackdrop != nil else { return }
 
             self?.addWindowDragHandle(titlebarView: titlebarView, toolbarView: toolbarView)
 
             accessoryClipView.translatesAutoresizingMaskIntoConstraints = false
-            accessoryClipView.leftAnchor.constraint(equalTo: windowButtonsBackdrop.rightAnchor).isActive = true
+            self?.tabBarLeadingConstraint?.isActive = false
+            let leadingConstraint = accessoryClipView.leftAnchor.constraint(equalTo: toolbarView.leftAnchor, constant: self?.hasWindowButtons == true ? 78 : 0)
+            leadingConstraint.isActive = true
+            self?.tabBarLeadingConstraint = leadingConstraint
             accessoryClipView.rightAnchor.constraint(equalTo: toolbarView.rightAnchor).isActive = true
             accessoryClipView.topAnchor.constraint(equalTo: toolbarView.topAnchor).isActive = true
             accessoryClipView.heightAnchor.constraint(equalTo: toolbarView.heightAnchor).isActive = true
@@ -440,8 +458,10 @@ class TitlebarTabsVenturaTerminalWindow: TerminalWindow {
             accessoryView.heightAnchor.constraint(equalTo: accessoryClipView.heightAnchor).isActive = true
             accessoryView.needsLayout = true
 
+            self?.addSidebarTitlebarMask(titlebarView: titlebarView, above: accessoryClipView)
             self?.hideToolbarOverflowButton()
             self?.hideTitleBarSeparators()
+            self?.updateForClaudeSidebarInset()
         }
     }
 
@@ -462,7 +482,13 @@ class TitlebarTabsVenturaTerminalWindow: TerminalWindow {
 
         view.translatesAutoresizingMaskIntoConstraints = false
         view.leftAnchor.constraint(equalTo: toolbarView.leftAnchor).isActive = true
-        view.rightAnchor.constraint(equalTo: toolbarView.leftAnchor, constant: hasWindowButtons ? 78 : 0).isActive = true
+        windowButtonsBackdropRightConstraint?.isActive = false
+        let rightConstraint = view.rightAnchor.constraint(
+            equalTo: toolbarView.leftAnchor,
+            constant: (hasWindowButtons ? 78 : 0) + claudeSidebarLeadingInset
+        )
+        rightConstraint.isActive = true
+        windowButtonsBackdropRightConstraint = rightConstraint
         view.topAnchor.constraint(equalTo: toolbarView.topAnchor).isActive = true
         view.heightAnchor.constraint(equalTo: toolbarView.heightAnchor).isActive = true
 
@@ -481,12 +507,50 @@ class TitlebarTabsVenturaTerminalWindow: TerminalWindow {
         view.identifier = NSUserInterfaceItemIdentifier("_windowDragHandle")
         titlebarView.superview?.addSubview(view)
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.leftAnchor.constraint(equalTo: toolbarView.leftAnchor).isActive = true
+        dragHandleLeadingConstraint?.isActive = false
+        let leadingConstraint = view.leftAnchor.constraint(equalTo: toolbarView.leftAnchor, constant: claudeSidebarLeadingInset)
+        leadingConstraint.isActive = true
+        dragHandleLeadingConstraint = leadingConstraint
         view.rightAnchor.constraint(equalTo: toolbarView.rightAnchor).isActive = true
         view.topAnchor.constraint(equalTo: toolbarView.topAnchor).isActive = true
         view.bottomAnchor.constraint(equalTo: toolbarView.topAnchor, constant: 12).isActive = true
 
         windowDragHandle = view
+    }
+
+    private func addSidebarTitlebarMask(titlebarView: NSView, above referenceView: NSView) {
+        if let view = sidebarTitlebarMask, view.superview == titlebarView {
+            positionSidebarTitlebarMask(view, in: titlebarView, above: referenceView)
+            return
+        }
+
+        sidebarTitlebarMask?.removeFromSuperview()
+
+        let view = ClaudeSidebarTitlebarMaskView()
+        view.identifier = NSUserInterfaceItemIdentifier("_claudeSidebarTitlebarMask")
+        view.backgroundColor = titlebarColor
+        positionSidebarTitlebarMask(view, in: titlebarView, above: referenceView)
+        view.translatesAutoresizingMaskIntoConstraints = false
+
+        let widthConstraint = view.widthAnchor.constraint(equalToConstant: claudeSidebarLeadingInset)
+        sidebarTitlebarMaskWidthConstraint = widthConstraint
+
+        NSLayoutConstraint.activate([
+            view.leftAnchor.constraint(equalTo: titlebarView.leftAnchor),
+            view.topAnchor.constraint(equalTo: titlebarView.topAnchor),
+            view.bottomAnchor.constraint(equalTo: titlebarView.bottomAnchor),
+            widthConstraint,
+        ])
+
+        sidebarTitlebarMask = view
+    }
+
+    private func positionSidebarTitlebarMask(_ view: NSView, in titlebarView: NSView, above referenceView: NSView) {
+        if let buttonsContainer = standardWindowButton(.closeButton)?.superview, buttonsContainer.superview == titlebarView {
+            titlebarView.addSubview(view, positioned: .below, relativeTo: buttonsContainer)
+        } else {
+            titlebarView.addSubview(view, positioned: .above, relativeTo: referenceView)
+        }
     }
 
     // This forces this view and all subviews to update layout and redraw. This is
@@ -578,6 +642,25 @@ private class WindowButtonsBackdropView: NSView {
         overlayLayer.backgroundColor = CGColor(genericGrayGamma2_2Gray: 0.95, alpha: 1)
 
         layer?.addSublayer(overlayLayer)
+    }
+}
+
+private final class ClaudeSidebarTitlebarMaskView: WindowDragView {
+    var backgroundColor: NSColor = .windowBackgroundColor {
+        didSet {
+            wantsLayer = true
+            layer?.backgroundColor = backgroundColor.cgColor
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = backgroundColor.cgColor
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
 

@@ -9,6 +9,7 @@ struct ClaudeSidebarView: View {
     let launcher: ClaudeSessionLauncher
     let onToggleSidebar: () -> Void
     let backgroundColor: Color
+    let topInset: CGFloat
 
     @Binding var selectedProjectPath: String?
     @Binding var selectedSessionId: String?
@@ -21,6 +22,9 @@ struct ClaudeSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Color.clear
+                .frame(height: topInset)
+
             header
 
             ScrollView {

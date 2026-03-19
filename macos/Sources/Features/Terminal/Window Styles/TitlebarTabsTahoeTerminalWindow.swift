@@ -159,6 +159,10 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
         }
     }
 
+    private var tabBarLeadingConstraint: NSLayoutConstraint?
+    private var sidebarTitlebarMask: ClaudeSidebarTitlebarMaskView?
+    private var sidebarTitlebarMaskWidthConstraint: NSLayoutConstraint?
+
     /// Take the NSTabBar that is on the window and convert it into titlebar tabs.
     ///
     /// Let me explain more background on what is happening here. When a tab bar is created, only the
@@ -203,10 +207,11 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
 
         // The padding for the tab bar. If we're showing window buttons then
         // we need to offset the window buttons.
-        let leftPadding: CGFloat = switch self.derivedConfig.macosWindowButtons {
+        let basePadding: CGFloat = switch self.derivedConfig.macosWindowButtons {
         case .hidden: 0
         case .visible: 70
         }
+        let leftPadding = basePadding
 
         // Constrain the accessory clip view (the parent of the accessory view
         // usually that clips the children) to the container view.
@@ -214,8 +219,12 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
         accessoryView.translatesAutoresizingMaskIntoConstraints = false
 
         // Setup all our constraints
+        tabBarLeadingConstraint?.isActive = false
+        let leadingConstraint = clipView.leftAnchor.constraint(equalTo: container.leftAnchor, constant: leftPadding)
+        tabBarLeadingConstraint = leadingConstraint
+
         NSLayoutConstraint.activate([
-            clipView.leftAnchor.constraint(equalTo: container.leftAnchor, constant: leftPadding),
+            leadingConstraint,
             clipView.rightAnchor.constraint(equalTo: container.rightAnchor),
             clipView.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
             clipView.heightAnchor.constraint(equalTo: container.heightAnchor),
@@ -224,6 +233,8 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
             accessoryView.topAnchor.constraint(equalTo: clipView.topAnchor),
             accessoryView.heightAnchor.constraint(equalTo: clipView.heightAnchor),
         ])
+
+        addSidebarTitlebarMask(titlebarView: titlebarView, above: clipView)
 
         clipView.needsLayout = true
         accessoryView.needsLayout = true
@@ -247,6 +258,60 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
             DispatchQueue.main.async {
                 self.setupTabBar()
             }
+        }
+    }
+
+    override func updateForClaudeSidebarInset() {
+        let basePadding: CGFloat = switch self.derivedConfig.macosWindowButtons {
+        case .hidden: 0
+        case .visible: 70
+        }
+        tabBarLeadingConstraint?.constant = basePadding
+        sidebarTitlebarMaskWidthConstraint?.constant = claudeSidebarLeadingInset
+        sidebarTitlebarMask?.isHidden = claudeSidebarLeadingInset <= 0
+        if let backgroundColor = preferredBackgroundColor {
+            sidebarTitlebarMask?.backgroundColor = backgroundColor
+        } else {
+            sidebarTitlebarMask?.backgroundColor = derivedConfig.backgroundColor.withAlphaComponent(derivedConfig.backgroundOpacity)
+        }
+    }
+
+    private func addSidebarTitlebarMask(titlebarView: NSView, above referenceView: NSView) {
+        if let view = sidebarTitlebarMask, view.superview == titlebarView {
+            positionSidebarTitlebarMask(view, in: titlebarView, above: referenceView)
+            return
+        }
+
+        sidebarTitlebarMask?.removeFromSuperview()
+
+        let view = ClaudeSidebarTitlebarMaskView()
+        view.identifier = NSUserInterfaceItemIdentifier("_claudeSidebarTitlebarMask")
+        if let backgroundColor = preferredBackgroundColor {
+            view.backgroundColor = backgroundColor
+        } else {
+            view.backgroundColor = derivedConfig.backgroundColor.withAlphaComponent(derivedConfig.backgroundOpacity)
+        }
+        positionSidebarTitlebarMask(view, in: titlebarView, above: referenceView)
+        view.translatesAutoresizingMaskIntoConstraints = false
+
+        let widthConstraint = view.widthAnchor.constraint(equalToConstant: claudeSidebarLeadingInset)
+        sidebarTitlebarMaskWidthConstraint = widthConstraint
+
+        NSLayoutConstraint.activate([
+            view.leftAnchor.constraint(equalTo: titlebarView.leftAnchor),
+            view.topAnchor.constraint(equalTo: titlebarView.topAnchor),
+            view.bottomAnchor.constraint(equalTo: titlebarView.bottomAnchor),
+            widthConstraint,
+        ])
+
+        sidebarTitlebarMask = view
+    }
+
+    private func positionSidebarTitlebarMask(_ view: NSView, in titlebarView: NSView, above referenceView: NSView) {
+        if let buttonsContainer = standardWindowButton(.closeButton)?.superview, buttonsContainer.superview == titlebarView {
+            titlebarView.addSubview(view, positioned: .below, relativeTo: buttonsContainer)
+        } else {
+            titlebarView.addSubview(view, positioned: .above, relativeTo: referenceView)
         }
     }
 
@@ -341,6 +406,33 @@ extension TitlebarTabsTahoeTerminalWindow {
                 .truncationMode(.tail)
                 .frame(maxWidth: .greatestFiniteMagnitude, alignment: .center)
                 .opacity(viewModel.hasTabBar ? 0 : 1) // hide when in fullscreen mode, where title bar will appear in the leading area under window buttons
+        }
+    }
+}
+
+private final class ClaudeSidebarTitlebarMaskView: NSView {
+    var backgroundColor: NSColor = .windowBackgroundColor {
+        didSet {
+            wantsLayer = true
+            layer?.backgroundColor = backgroundColor.cgColor
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = backgroundColor.cgColor
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.type == .leftMouseDown && event.clickCount == 1 {
+            window?.performDrag(with: event)
+        } else {
+            super.mouseDown(with: event)
         }
     }
 }
