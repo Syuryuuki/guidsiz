@@ -26,7 +26,7 @@ struct CyclingIconView: View {
                 }
             }
         }
-        .accessibilityLabel("guidsiz Application Icon")
+        .accessibilityLabel("Ghostty Application Icon")
         .accessibilityHint("Click to cycle through icon variants")
     }
 
