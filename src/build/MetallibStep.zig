@@ -21,6 +21,16 @@ pub const Options = struct {
 step: *Step,
 output: LazyPath,
 
+fn resolveToolPath(
+    b: *std.Build,
+    sdk: []const u8,
+    tool: []const u8,
+) []const u8 {
+    const argv = &.{ "/usr/bin/xcrun", "--sdk", sdk, "--find", tool };
+    const output = b.run(&.{ argv[0], argv[1], argv[2], argv[3], argv[4] });
+    return std.mem.trim(u8, output, " \t\r\n");
+}
+
 pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
     const sdk = switch (opts.target.result.os.tag) {
         .macos => "macosx",
@@ -50,12 +60,14 @@ pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
         .ios => "11.0",
         else => unreachable,
     };
+    const metal = resolveToolPath(b, sdk, "metal");
+    const metallib = resolveToolPath(b, sdk, "metallib");
 
     const run_ir = RunStep.create(
         b,
         b.fmt("metal {s}", .{opts.name}),
     );
-    run_ir.addArgs(&.{ "/usr/bin/xcrun", "-sdk", sdk, "metal", "-o" });
+    run_ir.addArgs(&.{ metal, "-o" });
     const output_ir = run_ir.addOutputFileArg(b.fmt("{s}.ir", .{opts.name}));
     run_ir.addArgs(&.{"-c"});
     for (opts.sources) |source| run_ir.addFileArg(source);
@@ -70,7 +82,7 @@ pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
         b,
         b.fmt("metallib {s}", .{opts.name}),
     );
-    run_lib.addArgs(&.{ "/usr/bin/xcrun", "-sdk", sdk, "metallib", "-o" });
+    run_lib.addArgs(&.{ metallib, "-o" });
     const output_lib = run_lib.addOutputFileArg(b.fmt("{s}.metallib", .{opts.name}));
     run_lib.addFileArg(output_ir);
     run_lib.step.dependOn(&run_ir.step);
