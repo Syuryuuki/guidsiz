@@ -84,7 +84,7 @@ pub fn main() !MainReturn {
             \\or `open -na guidsiz.app --args --foo=bar --baz=qux` to pass arguments.
             \\
             \\We don't have proper help output yet, sorry! Please refer to the
-            \\source code or Discord community for help for now. We'll fix this in time.
+            \\source code or project community for help for now. We'll fix this in time.
             \\
         ,
             .{},
